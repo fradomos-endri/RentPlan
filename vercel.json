@@ -1,0 +1,14 @@
+{
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
+  "devCommand": "npm run dev",
+  "env": {
+    "VITE_APP_NAME": "Car Rental Planner"
+  },
+  "routes": [
+    {
+      "src": "/(?!.*\\.(js|css|json|png|jpg|jpeg|svg|ico|woff|woff2)$).*",
+      "dest": "/index.html"
+    }
+  ]
+}
