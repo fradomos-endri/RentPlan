@@ -4,7 +4,7 @@ import { Header } from '@/components/Header';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { toast } from 'sonner';
-import { Mail, Lock, User, Phone, MapPin, Calendar, Loader, Building2 } from 'lucide-react';
+import { Mail, Lock, User, Phone, MapPin, Calendar, Loader } from 'lucide-react';
 import { setAuthData } from '@/lib/auth';
 import type { User as UserType } from '@/lib/auth';
 import { getApiUrl, API_ENDPOINTS } from '@/config/api';
@@ -12,7 +12,6 @@ import { getApiUrl, API_ENDPOINTS } from '@/config/api';
 export default function Signup() {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
-  const [role, setRole] = useState<'user' | 'business'>('user');
   const [formData, setFormData] = useState({
     full_name: '',
     email: '',
@@ -25,8 +24,6 @@ export default function Signup() {
     city: '',
     country: '',
     postal_code: '',
-    business_name: '',
-    business_license: '',
   });
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
@@ -46,18 +43,24 @@ export default function Signup() {
       return;
     }
 
-    if (role === 'business' && !formData.business_name) {
-      toast.error('Please enter your business name');
-      return;
-    }
-
     if (formData.password !== formData.confirm_password) {
       toast.error('Passwords do not match');
       return;
     }
 
-    if (formData.password.length < 6) {
-      toast.error('Password must be at least 6 characters');
+    // Password strength validation
+    if (formData.password.length < 8) {
+      toast.error('Password must be at least 8 characters');
+      return;
+    }
+
+    if (!/[A-Z]/.test(formData.password)) {
+      toast.error('Password must contain at least one uppercase letter');
+      return;
+    }
+
+    if (!/[!@#$%^&*(),.?":{}|<>]/.test(formData.password)) {
+      toast.error('Password must contain at least one special character');
       return;
     }
 
@@ -75,13 +78,7 @@ export default function Signup() {
         city: formData.city,
         country: formData.country,
         postal_code: formData.postal_code,
-        role: role,
       };
-
-      if (role === 'business') {
-        body.business_name = formData.business_name;
-        body.business_license = formData.business_license;
-      }
 
       const response = await fetch(getApiUrl(API_ENDPOINTS.USERS_REGISTER), {
         method: 'POST',
@@ -130,36 +127,6 @@ export default function Signup() {
               <p className="text-muted-foreground">
                 Join RentPlan and start renting cars today
               </p>
-            </div>
-
-            {/* Role Selection */}
-            <div className="mb-8 flex gap-4">
-              <button
-                type="button"
-                onClick={() => setRole('user')}
-                className={`flex-1 py-4 px-4 rounded-lg border-2 transition-all ${
-                  role === 'user'
-                    ? 'border-blue-500 bg-blue-500/10'
-                    : 'border-border bg-background hover:border-blue-300'
-                }`}
-              >
-                <User className="w-6 h-6 mx-auto mb-2 text-foreground" />
-                <p className="font-semibold text-foreground">Customer</p>
-                <p className="text-xs text-muted-foreground">Book & rent cars</p>
-              </button>
-              <button
-                type="button"
-                onClick={() => setRole('business')}
-                className={`flex-1 py-4 px-4 rounded-lg border-2 transition-all ${
-                  role === 'business'
-                    ? 'border-blue-500 bg-blue-500/10'
-                    : 'border-border bg-background hover:border-blue-300'
-                }`}
-              >
-                <Building2 className="w-6 h-6 mx-auto mb-2 text-foreground" />
-                <p className="font-semibold text-foreground">Business</p>
-                <p className="text-xs text-muted-foreground">Rental agency</p>
-              </button>
             </div>
 
             <form onSubmit={handleSubmit} className="space-y-6">
@@ -213,6 +180,9 @@ export default function Signup() {
                     className="w-full px-4 py-2 border border-border rounded-lg bg-background text-foreground placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary"
                     required
                   />
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Must be at least 8 characters, include 1 uppercase letter and 1 special character
+                  </p>
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-foreground mb-2">
@@ -340,45 +310,6 @@ export default function Signup() {
                   />
                 </div>
               </div>
-
-              {/* Business Fields - Only show if role is business */}
-              {role === 'business' && (
-                <>
-                  <div className="border-t pt-6">
-                    <h3 className="text-lg font-semibold text-foreground mb-4">Business Information</h3>
-                  </div>
-                  <div className="grid md:grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-sm font-medium text-foreground mb-2">
-                        <Building2 className="inline-block w-4 h-4 mr-2" />
-                        Business Name *
-                      </label>
-                      <input
-                        type="text"
-                        name="business_name"
-                        value={formData.business_name}
-                        onChange={handleChange}
-                        placeholder="Your Rental Agency"
-                        className="w-full px-4 py-2 border border-border rounded-lg bg-background text-foreground placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary"
-                        required={role === 'business'}
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-foreground mb-2">
-                        Business License Number
-                      </label>
-                      <input
-                        type="text"
-                        name="business_license"
-                        value={formData.business_license}
-                        onChange={handleChange}
-                        placeholder="License #"
-                        className="w-full px-4 py-2 border border-border rounded-lg bg-background text-foreground placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary"
-                      />
-                    </div>
-                  </div>
-                </>
-              )}
 
               {/* Submit Button */}
               <Button

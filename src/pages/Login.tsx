@@ -4,7 +4,7 @@ import { Header } from '@/components/Header';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { toast } from 'sonner';
-import { Mail, Lock, Loader, User, Building2 } from 'lucide-react';
+import { Mail, Lock, Loader } from 'lucide-react';
 import { setAuthData } from '@/lib/auth';
 import type { User as UserType } from '@/lib/auth';
 import { getApiUrl, API_ENDPOINTS } from '@/config/api';
@@ -12,7 +12,6 @@ import { getApiUrl, API_ENDPOINTS } from '@/config/api';
 export default function Login() {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
-  const [role, setRole] = useState<'user' | 'business'>('user');
   const [formData, setFormData] = useState({
     email: '',
     password: '',
@@ -87,34 +86,6 @@ export default function Login() {
               <p className="text-muted-foreground">
                 Sign in to your RentPlan account
               </p>
-            </div>
-
-            {/* Role Selection */}
-            <div className="mb-8 flex gap-3">
-              <button
-                type="button"
-                onClick={() => setRole('user')}
-                className={`flex-1 py-3 px-4 rounded-lg border-2 transition-all ${
-                  role === 'user'
-                    ? 'border-blue-500 bg-blue-500/10'
-                    : 'border-border bg-background hover:border-blue-300'
-                }`}
-              >
-                <User className="w-5 h-5 mx-auto mb-1 text-foreground" />
-                <p className="text-sm font-semibold text-foreground">Customer</p>
-              </button>
-              <button
-                type="button"
-                onClick={() => setRole('business')}
-                className={`flex-1 py-3 px-4 rounded-lg border-2 transition-all ${
-                  role === 'business'
-                    ? 'border-blue-500 bg-blue-500/10'
-                    : 'border-border bg-background hover:border-blue-300'
-                }`}
-              >
-                <Building2 className="w-5 h-5 mx-auto mb-1 text-foreground" />
-                <p className="text-sm font-semibold text-foreground">Business</p>
-              </button>
             </div>
 
             <form onSubmit={handleSubmit} className="space-y-6">
