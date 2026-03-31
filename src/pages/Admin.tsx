@@ -99,7 +99,7 @@ export default function Admin() {
                   Add New Agency
                 </DialogTitle>
                 <DialogDescription>
-                  Fil in the details to add a new car rental agency to the platform.
+                  Fill in the details to add a new car rental agency to the platform.
                 </DialogDescription>
               </DialogHeader>
 
