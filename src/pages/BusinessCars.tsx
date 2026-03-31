@@ -74,6 +74,7 @@ interface Business {
   phone?: string;
   email?: string;
   description?: string;
+  approved?: boolean;
 }
 
 interface BusinessImage {
@@ -121,6 +122,14 @@ interface CarBlock {
   end_date: string;
   reason?: string;
   created_at: string;
+}
+
+interface DayPrice {
+  id: number;
+  car_id: number;
+  date: string;       // YYYY-MM-DD
+  price: number;
+  note?: string | null;
 }
 
 type ViewMode = 'grid' | 'calendar';
@@ -196,6 +205,13 @@ export default function BusinessCars() {
   const [selectedBlock, setSelectedBlock] = useState<CarBlock | null>(null);
   const [showBlockDetailsModal, setShowBlockDetailsModal] = useState(false);
   const [deletingBlock, setDeletingBlock] = useState(false);
+
+  // Day price states
+  const [dayPrices, setDayPrices] = useState<DayPrice[]>([]);
+  const [carDefaultPrices, setCarDefaultPrices] = useState<Record<number, number>>({});
+  const [showDayPriceModal, setShowDayPriceModal] = useState(false);
+  const [dayPriceData, setDayPriceData] = useState({ car_id: 0, date: '', end_date: '', price: '', note: '' });
+  const [savingDayPrice, setSavingDayPrice] = useState(false);
   
   // Business edit/delete states
   const [showEditBusinessModal, setShowEditBusinessModal] = useState(false);
@@ -237,10 +253,11 @@ export default function BusinessCars() {
     fetchBusinessImages();
   }, [businessId, token, navigate]);
 
-  // Fetch car blocks when cars are loaded
+  // Fetch car blocks and day prices when cars are loaded
   useEffect(() => {
     if (cars.length > 0) {
       fetchCarBlocks();
+      fetchDayPrices(cars);
     }
   }, [cars.length]);
 
@@ -565,6 +582,127 @@ export default function BusinessCars() {
       }
     } catch (error) {
       console.error('Error fetching car images:', error);
+    }
+  };
+
+  const fetchDayPrices = async (carList?: Car[]) => {
+    if (!businessId) return;
+    const targetCars = carList ?? cars;
+    try {
+      // Fetch pricing for each car individually using GET /api/cars/:id/pricing
+      const allPrices: DayPrice[] = [];
+      const defaultPrices: Record<number, number> = {};
+      for (const car of targetCars) {
+        const response = await fetch(getApiUrl(`${API_ENDPOINTS.CARS}/${car.car_id}/pricing`), {
+          headers: { 'Authorization': `Bearer ${token}` },
+        });
+        if (response.ok) {
+          const data = await response.json();
+          // Store default price per car from pricing API
+          if (data.default_price_per_day != null) {
+            defaultPrices[car.car_id] = parseFloat(data.default_price_per_day);
+          }
+          const customPricing = data.custom_pricing || [];
+          customPricing.forEach((p: any) => {
+            // Parse date in local timezone to avoid UTC offset shifting the day
+            const localDate = new Date(p.date);
+            const localDateStr = `${localDate.getFullYear()}-${String(localDate.getMonth() + 1).padStart(2, '0')}-${String(localDate.getDate()).padStart(2, '0')}`;
+            allPrices.push({
+              id: p.pricing_id,
+              car_id: car.car_id,
+              date: localDateStr,
+              price: parseFloat(p.price),
+              note: p.note ?? null,
+            });
+          });
+        }
+      }
+      setDayPrices(allPrices);
+      setCarDefaultPrices(defaultPrices);
+    } catch (error) {
+      console.error('Error fetching day prices:', error);
+    }
+  };
+
+  const saveDayPrice = async () => {
+    if (!dayPriceData.car_id || !dayPriceData.date || !dayPriceData.price) {
+      toast.error('Please fill in all fields');
+      return;
+    }
+    setSavingDayPrice(true);
+    try {
+      // Build list of all dates in the range
+      const start = new Date(dayPriceData.date + 'T00:00:00');
+      const end = new Date((dayPriceData.end_date || dayPriceData.date) + 'T00:00:00');
+      const dates: string[] = [];
+      for (const d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+        dates.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`);
+      }
+
+      let allOk = true;
+      for (const dateStr of dates) {
+        const existing = dayPrices.find(
+          dp => dp.car_id === dayPriceData.car_id && dp.date === dateStr
+        );
+        let response;
+        if (existing) {
+          response = await fetch(
+            getApiUrl(`${API_ENDPOINTS.CARS}/${dayPriceData.car_id}/pricing/${dateStr}`),
+            {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+              body: JSON.stringify({ price: parseFloat(dayPriceData.price), note: dayPriceData.note || null }),
+            }
+          );
+        } else {
+          response = await fetch(
+            getApiUrl(`${API_ENDPOINTS.CARS}/${dayPriceData.car_id}/pricing`),
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+              body: JSON.stringify({ date: dateStr, price: parseFloat(dayPriceData.price), note: dayPriceData.note || null }),
+            }
+          );
+        }
+        if (!response.ok) { allOk = false; }
+      }
+
+      if (allOk) {
+        toast.success(dates.length > 1 ? `Price set for ${dates.length} days` : 'Price saved successfully');
+        setShowDayPriceModal(false);
+        await fetchDayPrices(cars);
+      } else {
+        toast.error('Some dates failed to save');
+        await fetchDayPrices(cars);
+      }
+    } catch (error) {
+      console.error('Error saving day price:', error);
+      toast.error('Failed to save price');
+    } finally {
+      setSavingDayPrice(false);
+    }
+  };
+
+  const deleteDayPrice = async (carId: number, date: string) => {
+    try {
+      // DELETE /api/cars/:id/pricing/:date
+      const response = await fetch(
+        getApiUrl(`${API_ENDPOINTS.CARS}/${carId}/pricing/${date}`),
+        {
+          method: 'DELETE',
+          headers: { 'Authorization': `Bearer ${token}` },
+        }
+      );
+      if (response.ok) {
+        toast.success('Custom price removed, default price restored');
+        await fetchDayPrices(cars);
+        setShowDayPriceModal(false);
+      } else {
+        toast.error('Failed to remove price');
+      }
+    } catch (error) {
+      console.error('Error deleting day price:', error);
+      toast.error('Failed to remove price');
     }
   };
 
@@ -1782,6 +1920,30 @@ export default function BusinessCars() {
 
       <div className="container py-12 px-4">
         <div className="max-w-7xl mx-auto">
+          {/* Pending Approval Banner */}
+          {business && business.approved === false && (
+            <div className="mb-6 p-6 bg-yellow-50 border-2 border-yellow-400 rounded-xl">
+              <div className="flex items-start gap-4">
+                <div className="flex-shrink-0">
+                  <Clock className="w-8 h-8 text-yellow-600" />
+                </div>
+                <div className="flex-1">
+                  <h3 className="text-lg font-bold text-yellow-900 mb-2">
+                    Business Pending Approval
+                  </h3>
+                  <p className="text-yellow-800 mb-3">
+                    Your business registration is currently under review by our administrators. 
+                    You will not be able to add cars or manage bookings until your business is approved.
+                  </p>
+                  <p className="text-sm text-yellow-700">
+                    <strong>Business Name:</strong> {business.business_name} | 
+                    <strong className="ml-2">VAT:</strong> {business.vat_number}
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Header with Cover Image */}
           <div className="mb-8">
             <Button
@@ -1813,7 +1975,9 @@ export default function BusinessCars() {
                 <Button
                   size="sm"
                   onClick={() => setShowCoverImageModal(true)}
-                  className="bg-white/20 hover:bg-white/30 text-white backdrop-blur-sm gap-2"
+                  disabled={business?.approved === false}
+                  className="bg-white/20 hover:bg-white/30 text-white backdrop-blur-sm gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                  title={business?.approved === false ? "Business must be approved first" : undefined}
                 >
                   <Camera className="w-4 h-4" />
                   {coverImage ? 'Change Cover' : 'Add Cover'}
@@ -1821,7 +1985,9 @@ export default function BusinessCars() {
                 <Button
                   size="sm"
                   onClick={() => setShowImagesModal(true)}
-                  className="bg-white/20 hover:bg-white/30 text-white backdrop-blur-sm gap-2"
+                  disabled={business?.approved === false}
+                  className="bg-white/20 hover:bg-white/30 text-white backdrop-blur-sm gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                  title={business?.approved === false ? "Business must be approved first" : undefined}
                 >
                   <ImageIcon className="w-4 h-4" />
                   Gallery ({businessImages.length})
@@ -1830,7 +1996,9 @@ export default function BusinessCars() {
                   <DropdownMenuTrigger asChild>
                     <Button
                       size="sm"
-                      className="bg-white/20 hover:bg-white/30 text-white backdrop-blur-sm gap-2"
+                      disabled={business?.approved === false}
+                      className="bg-white/20 hover:bg-white/30 text-white backdrop-blur-sm gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                      title={business?.approved === false ? "Business must be approved first" : undefined}
                     >
                       <MoreVertical className="w-4 h-4" />
                     </Button>
@@ -1882,7 +2050,9 @@ export default function BusinessCars() {
               </div>
               <Button
                 onClick={() => setShowCarModal(true)}
-                className="bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 text-white gap-2 shadow-md"
+                disabled={business?.approved === false}
+                className="bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 text-white gap-2 shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
+                title={business?.approved === false ? "Business must be approved before adding cars" : "Add a new car"}
               >
                 <Plus className="w-4 h-4" />
                 Add Car
@@ -2087,7 +2257,7 @@ export default function BusinessCars() {
                   <CalendarDays className="w-5 h-5 text-purple-600" />
                   Booking Calendar - Next 30 Days
                 </h3>
-                <p className="text-sm text-gray-500 mt-1">Each row represents a car and its booking status across dates</p>
+                <p className="text-sm text-gray-500 mt-1">Click any available cell to set a custom price for that day</p>
               </div>
               <Button
                 onClick={() => fetchBookings()}
@@ -2109,7 +2279,7 @@ export default function BusinessCars() {
                       const date = new Date();
                       date.setDate(date.getDate() + i);
                       return (
-                        <th key={i} className="px-2 py-2 text-center font-semibold text-gray-600 border-b-2 border-gray-200 min-w-12">
+                        <th key={i} className="px-2 py-2 text-center font-semibold text-gray-600 border-b-2 border-gray-200 min-w-16">
                           <div className="text-xs">{date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</div>
                         </th>
                       );
@@ -2120,38 +2290,62 @@ export default function BusinessCars() {
                   {cars.map((car) => (
                     <tr key={car.car_id} className="border-b hover:bg-gray-50 transition-colors">
                       <td className="sticky left-0 bg-white z-10 px-3 py-2 font-medium text-gray-800 border-r-2 w-40">
-                        {car.brand} {car.model}
+                        <div>{car.brand} {car.model}</div>
+                        <div className="text-gray-400 font-normal">€{(carDefaultPrices[car.car_id] ?? parseFloat(car.price_per_day) ?? 0).toFixed(0)}/day</div>
                       </td>
                       {Array.from({ length: 30 }).map((_, i) => {
                         const date = new Date();
                         date.setDate(date.getDate() + i);
-                        const dateStr = date.toISOString().split('T')[0];
-                        
-                        // Check if car has a booking on this date
+                        const dateStr = formatDateLocal(date);
+
                         const booking = bookings.find(b => {
-                          const startDate = new Date(b.start_date).toISOString().split('T')[0];
-                          const endDate = new Date(b.end_date).toISOString().split('T')[0];
-                          return b.car_id === car.car_id && 
-                                 b.status === 'confirmed' && 
-                                 dateStr >= startDate && 
+                          const startDate = formatDateLocal(new Date(b.start_date));
+                          const endDate = formatDateLocal(new Date(b.end_date));
+                          return b.car_id === car.car_id &&
+                                 b.status === 'confirmed' &&
+                                 dateStr >= startDate &&
                                  dateStr <= endDate;
                         });
-                        
-                        const isToday = dateStr === new Date().toISOString().split('T')[0];
-                        
+
+                        const customPrice = dayPrices.find(
+                          dp => dp.car_id === car.car_id && dp.date === dateStr
+                        );
+                        const defaultPrice = carDefaultPrices[car.car_id] ?? parseFloat(car.price_per_day) ?? 0;
+                        const displayPrice = customPrice ? customPrice.price : defaultPrice;
+
+                        const isToday = dateStr === formatDateLocal(new Date());
+
                         return (
-                          <td 
-                            key={i} 
-                            className={`px-2 py-2 text-center text-xs border-r border-gray-200 min-w-12 transition-colors ${
-                              isToday ? 'bg-yellow-100' : booking ? 'bg-red-200' : 'bg-green-100'
+                          <td
+                            key={i}
+                            onClick={() => {
+                              if (!booking) {
+                                setDayPriceData({
+                                  car_id: car.car_id,
+                                  date: dateStr,
+                                  end_date: dateStr,
+                                  price: Math.round(displayPrice).toString(),
+                                  note: customPrice?.note || '',
+                                });
+                                setShowDayPriceModal(true);
+                              }
+                            }}
+                            className={`px-1 py-1 text-center text-xs border-r border-gray-200 min-w-16 transition-colors ${
+                              booking
+                                ? 'bg-red-200 cursor-default'
+                                : isToday
+                                ? 'bg-yellow-100 cursor-pointer hover:bg-yellow-200'
+                                : customPrice
+                                ? 'bg-blue-100 cursor-pointer hover:bg-blue-200'
+                                : 'bg-green-100 cursor-pointer hover:bg-green-200'
                             }`}
                           >
                             {booking ? (
-                              <span className="font-semibold text-red-800" title={`Booked: ${booking.booking_id}`}>●</span>
-                            ) : isToday ? (
-                              <span className="text-yellow-800">✓</span>
+                              <span className="font-semibold text-red-800">●</span>
                             ) : (
-                              <span className="text-green-800">○</span>
+                              <span className={`font-semibold ${customPrice ? 'text-blue-800' : isToday ? 'text-yellow-800' : 'text-green-800'}`}>
+                                €{displayPrice.toFixed(0)}
+                              </span>
                             )}
                           </td>
                         );
@@ -2162,18 +2356,22 @@ export default function BusinessCars() {
               </table>
             </div>
             
-            <div className="mt-4 flex gap-4 text-xs">
+            <div className="mt-4 flex flex-wrap gap-4 text-xs">
               <div className="flex items-center gap-2">
-                <div className="w-4 h-4 bg-green-100 border border-green-300"></div>
-                <span className="text-gray-700">Available (○)</span>
+                <div className="w-4 h-4 bg-green-100 border border-green-300 rounded"></div>
+                <span className="text-gray-700">Available (default price)</span>
               </div>
               <div className="flex items-center gap-2">
-                <div className="w-4 h-4 bg-red-200 border border-red-400"></div>
-                <span className="text-gray-700">Booked (●)</span>
+                <div className="w-4 h-4 bg-blue-100 border border-blue-300 rounded"></div>
+                <span className="text-gray-700">Custom price set</span>
               </div>
               <div className="flex items-center gap-2">
-                <div className="w-4 h-4 bg-yellow-100 border border-yellow-300"></div>
-                <span className="text-gray-700">Today (✓)</span>
+                <div className="w-4 h-4 bg-red-200 border border-red-400 rounded"></div>
+                <span className="text-gray-700">Booked</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-4 h-4 bg-yellow-100 border border-yellow-300 rounded"></div>
+                <span className="text-gray-700">Today</span>
               </div>
             </div>
           </Card>
@@ -2547,7 +2745,7 @@ export default function BusinessCars() {
                                     <div className="flex items-center gap-3">
                                       <div className="text-right">
                                         <p className="text-sm text-blue-100">Price/Day</p>
-                                        <p className="text-xl font-bold">${car.price_per_day}</p>
+                                        <p className="text-xl font-bold">€{(carDefaultPrices[car.car_id] ?? parseFloat(car.price_per_day) ?? 0).toFixed(0)}</p>
                                       </div>
                                       <Button
                                         size="sm"
@@ -2579,6 +2777,11 @@ export default function BusinessCars() {
                                       const booking = getBookingForCarOnDate(car.car_id, date);
                                       const block = getCarBlockForDate(car.car_id, date);
                                       const dateStr = formatDateLocal(date);
+
+                                      // Price for this cell
+                                      const customPrice = dayPrices.find(dp => dp.car_id === car.car_id && dp.date === dateStr);
+                                      const defaultPrice = carDefaultPrices[car.car_id] ?? parseFloat(car.price_per_day) ?? 0;
+                                      const displayPrice = customPrice ? customPrice.price : defaultPrice;
                                       
                                       // Check if this is a check-in or check-out day
                                       let isCheckIn = false;
@@ -2623,17 +2826,22 @@ export default function BusinessCars() {
                                                 : booking.status === 'pending'
                                                 ? 'bg-yellow-100 cursor-pointer hover:shadow-lg'
                                                 : 'bg-gray-100'
-                                              : 'bg-white hover:bg-blue-50/50'
+                                              : customPrice
+                                              ? 'bg-blue-50 cursor-pointer hover:bg-blue-100'
+                                              : 'bg-white cursor-pointer hover:bg-gray-50'
                                           }`}
                                           onClick={() => {
                                             if (block) {
                                               handleBlockClick(block);
                                             } else if (booking) {
                                               handleBookingClick(booking);
+                                            } else if (isCurrentMonth) {
+                                              setDayPriceData({ car_id: car.car_id, date: dateStr, end_date: dateStr, price: Math.round(displayPrice).toString(), note: customPrice?.note || '' });
+                                              setShowDayPriceModal(true);
                                             }
                                           }}
                                         >
-                                          {/* Block/Book button for available dates */}
+                                          {/* Block button for available dates */}
                                           {!booking && !block && isCurrentMonth && (
                                             <button
                                               onClick={(e) => {
@@ -2713,6 +2921,13 @@ export default function BusinessCars() {
                                                 ${booking.total_price}
                                               </p>
                                             </div>
+                                          ) : isCurrentMonth ? (
+                                            <div className="mt-1">
+                                              <span className={`text-xs font-semibold ${customPrice ? 'text-blue-700' : 'text-gray-400'}`}>
+                                                €{displayPrice.toFixed(0)}
+                                                {customPrice && <span className="ml-1 text-blue-500">✎</span>}
+                                              </span>
+                                            </div>
                                           ) : null}
                                         </div>
                                       );
@@ -2755,6 +2970,10 @@ export default function BusinessCars() {
                       <div className="flex items-center gap-2">
                         <div className="w-6 h-6 rounded-md bg-blue-100 border-2 border-blue-500"></div>
                         <span className="text-sm font-medium text-gray-700">Today</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <div className="w-6 h-6 rounded-md bg-blue-50 border border-blue-200 flex items-center justify-center text-blue-700 text-xs font-bold">✎</div>
+                        <span className="text-sm font-medium text-gray-700">Custom Price (click to edit)</span>
                       </div>
                     </div>
                   </div>
@@ -4003,6 +4222,119 @@ export default function BusinessCars() {
                 >
                   Close
                 </Button>
+              </div>
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {/* Day Price Modal */}
+      {showDayPriceModal && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={() => setShowDayPriceModal(false)}>
+          <Card className="w-full max-w-sm shadow-2xl border bg-white" onClick={(e) => e.stopPropagation()}>
+            <div className="p-6">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-bold text-gray-800 flex items-center gap-2">
+                  <DollarSign className="w-5 h-5 text-blue-600" />
+                  Set Price for Day(s)
+                </h3>
+                <Button variant="ghost" size="sm" onClick={() => setShowDayPriceModal(false)}>
+                  <X className="w-4 h-4" />
+                </Button>
+              </div>
+
+              <div className="space-y-4">
+                <div>
+                  <p className="text-sm text-gray-500 mb-1">Car</p>
+                  <p className="font-semibold text-gray-800">
+                    {cars.find(c => c.car_id === dayPriceData.car_id)?.brand}{' '}
+                    {cars.find(c => c.car_id === dayPriceData.car_id)?.model}
+                  </p>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <Label className="text-sm font-medium text-gray-700 mb-1 block">From</Label>
+                    <Input
+                      type="date"
+                      value={dayPriceData.date}
+                      onChange={(e) => setDayPriceData(prev => ({
+                        ...prev,
+                        date: e.target.value,
+                        end_date: prev.end_date < e.target.value ? e.target.value : prev.end_date,
+                      }))}
+                      className="w-full"
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-sm font-medium text-gray-700 mb-1 block">To</Label>
+                    <Input
+                      type="date"
+                      value={dayPriceData.end_date}
+                      min={dayPriceData.date}
+                      onChange={(e) => setDayPriceData(prev => ({ ...prev, end_date: e.target.value }))}
+                      className="w-full"
+                    />
+                  </div>
+                </div>
+                {dayPriceData.end_date && dayPriceData.end_date !== dayPriceData.date && (() => {
+                  const start = new Date(dayPriceData.date + 'T00:00:00');
+                  const end = new Date(dayPriceData.end_date + 'T00:00:00');
+                  const days = Math.round((end.getTime() - start.getTime()) / 86400000) + 1;
+                  return (
+                    <p className="text-xs text-blue-600 font-medium -mt-1">
+                      {days} day{days !== 1 ? 's' : ''} selected
+                    </p>
+                  );
+                })()}
+                <div>
+                  <Label className="text-sm font-medium text-gray-700 mb-1 block">
+                    Price per day (€)
+                  </Label>
+                  <Input
+                    type="number"
+                    min="0"
+                    step="1"
+                    value={dayPriceData.price}
+                    onChange={(e) => setDayPriceData(prev => ({ ...prev, price: e.target.value }))}
+                    placeholder={`Default: €${(carDefaultPrices[dayPriceData.car_id] ?? parseFloat(cars.find(c => c.car_id === dayPriceData.car_id)?.price_per_day || '0')).toFixed(2)}`}
+                    className="w-full"
+                  />
+                  <p className="text-xs text-gray-400 mt-1">
+                    Default price: €{(carDefaultPrices[dayPriceData.car_id] ?? parseFloat(cars.find(c => c.car_id === dayPriceData.car_id)?.price_per_day || '0')).toFixed(2)}
+                  </p>
+                </div>
+                <div>
+                  <Label className="text-sm font-medium text-gray-700 mb-1 block">
+                    Description / Note (optional)
+                  </Label>
+                  <Textarea
+                    value={dayPriceData.note}
+                    onChange={(e) => setDayPriceData(prev => ({ ...prev, note: e.target.value }))}
+                    placeholder="e.g. Holiday rate, Weekend surcharge..."
+                    className="w-full resize-none"
+                    rows={2}
+                  />
+                </div>
+              </div>
+
+              <div className="flex gap-3 mt-6">
+                <Button
+                  onClick={saveDayPrice}
+                  disabled={savingDayPrice}
+                  className="flex-1 bg-blue-600 hover:bg-blue-700 text-white"
+                >
+                  {savingDayPrice ? <Loader className="w-4 h-4 animate-spin mr-2" /> : <DollarSign className="w-4 h-4 mr-2" />}
+                  {dayPriceData.end_date && dayPriceData.end_date !== dayPriceData.date ? 'Save Range' : 'Save Price'}
+                </Button>
+                {dayPriceData.end_date === dayPriceData.date && dayPrices.find(dp => dp.car_id === dayPriceData.car_id && dp.date === dayPriceData.date) && (
+                  <Button
+                    onClick={() => deleteDayPrice(dayPriceData.car_id, dayPriceData.date)}
+                    variant="outline"
+                    className="text-red-600 border-red-300 hover:bg-red-50"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </Button>
+                )}
               </div>
             </div>
           </Card>

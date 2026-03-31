@@ -6,7 +6,7 @@
  */
 
 // Change this URL when your IP changes
-export const API_BASE_URL = 'http://10.4.31.121:3000';
+export const API_BASE_URL = 'http://localhost:3000';
 
 /**
  * Helper function to build API endpoint URLs

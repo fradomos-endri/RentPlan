@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { format, differenceInDays } from 'date-fns';
-import { User, Mail, ArrowRight, Check, Loader } from 'lucide-react';
+import { User, Mail, ArrowRight, Check, Loader, ChevronDown, ChevronUp } from 'lucide-react';
 import { Car } from '@/types';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -23,6 +23,19 @@ interface BookingDialogProps {
   onOpenChange: (open: boolean) => void;
 }
 
+interface PriceBreakdownDay {
+  date: string;
+  price: number;
+  is_custom: boolean;
+}
+
+interface RangePriceData {
+  price_per_day: number;
+  days: number;
+  total_price_for_range: number;
+  price_breakdown: PriceBreakdownDay[];
+}
+
 type BookingStep = 'dates' | 'details' | 'confirmation';
 
 export function BookingDialog({ car, open, onOpenChange }: BookingDialogProps) {
@@ -32,7 +45,63 @@ export function BookingDialog({ car, open, onOpenChange }: BookingDialogProps) {
   const [customerEmail, setCustomerEmail] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [bookingId, setBookingId] = useState<number | null>(null);
+  const [rangePrice, setRangePrice] = useState<RangePriceData | null>(null);
+  const [loadingPrice, setLoadingPrice] = useState(false);
+  const [showBreakdown, setShowBreakdown] = useState(false);
+  const [defaultPricePerDay, setDefaultPricePerDay] = useState<number>(0);
   const token = getStoredToken();
+
+  const formatDateLocal = (date: Date) => {
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, '0');
+    const d = String(date.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  };
+
+  // Fetch car's default price when dialog opens
+  useEffect(() => {
+    if (!car || !open) return;
+    const today = formatDateLocal(new Date());
+    fetch(getApiUrl(`${API_ENDPOINTS.CARS}/${car.id}?date=${today}`))
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (data && data.effective_price != null) {
+          setDefaultPricePerDay(parseFloat(data.effective_price));
+        } else if (car.pricePerDay > 0) {
+          setDefaultPricePerDay(car.pricePerDay);
+        }
+      })
+      .catch(() => {
+        if (car.pricePerDay > 0) setDefaultPricePerDay(car.pricePerDay);
+      });
+  }, [car, open]);
+
+  // Fetch real price breakdown whenever a full range is selected
+  useEffect(() => {
+    if (!car || !selectedRange.start || !selectedRange.end) {
+      setRangePrice(null);
+      return;
+    }
+    const from = formatDateLocal(selectedRange.start);
+    const to = formatDateLocal(selectedRange.end);
+    setLoadingPrice(true);
+    fetch(getApiUrl(`${API_ENDPOINTS.CARS}/${car.id}?from=${from}&to=${to}`))
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (data && data.total_price_for_range != null) {
+          setRangePrice({
+            price_per_day: parseFloat(data.price_per_day),
+            days: data.days,
+            total_price_for_range: parseFloat(data.total_price_for_range),
+            price_breakdown: data.price_breakdown || [],
+          });
+        } else {
+          setRangePrice(null);
+        }
+      })
+      .catch(() => setRangePrice(null))
+      .finally(() => setLoadingPrice(false));
+  }, [car, selectedRange.start, selectedRange.end]);
 
   const resetForm = () => {
     setStep('dates');
@@ -41,20 +110,25 @@ export function BookingDialog({ car, open, onOpenChange }: BookingDialogProps) {
     setCustomerEmail('');
     setIsProcessing(false);
     setBookingId(null);
+    setRangePrice(null);
+    setShowBreakdown(false);
+    setDefaultPricePerDay(0);
   };
 
   const handleClose = (isOpen: boolean) => {
-    if (!isOpen) {
-      resetForm();
-    }
+    if (!isOpen) resetForm();
     onOpenChange(isOpen);
   };
 
-  const totalDays = selectedRange.start && selectedRange.end 
+  const totalDays = selectedRange.start && selectedRange.end
     ? differenceInDays(selectedRange.end, selectedRange.start) + 1
     : 0;
 
-  const totalPrice = car ? car.pricePerDay * totalDays : 0;
+  const effectivePricePerDay = defaultPricePerDay > 0 ? defaultPricePerDay : (car?.pricePerDay ?? 0);
+
+  const totalPrice = rangePrice
+    ? rangePrice.total_price_for_range
+    : effectivePricePerDay * totalDays;
 
   const handleContinueToDetails = () => {
     if (!selectedRange.start || !selectedRange.end) {
@@ -154,18 +228,55 @@ export function BookingDialog({ car, open, onOpenChange }: BookingDialogProps) {
           <div className="space-y-6">
             <AvailabilityCalendar
               carId={car.id}
+              defaultPrice={car.pricePerDay}
               selectedRange={selectedRange}
               onRangeSelect={setSelectedRange}
             />
 
             {totalDays > 0 && (
-              <div className="rounded-lg bg-muted p-4">
-                <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">
-                    ${car.pricePerDay} × {totalDays} day{totalDays > 1 ? 's' : ''}
-                  </span>
-                  <span className="font-semibold">${totalPrice}</span>
-                </div>
+              <div className="rounded-lg bg-muted p-4 space-y-2">
+                {loadingPrice ? (
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <Loader className="h-4 w-4 animate-spin" />
+                    Calculating price...
+                  </div>
+                ) : (
+                  <>
+                    <div className="flex justify-between text-sm">
+                      <span className="text-muted-foreground">
+                        {totalDays} day{totalDays > 1 ? 's' : ''}
+                      </span>
+                      <span className="font-semibold">€{totalPrice.toFixed(2)}</span>
+                    </div>
+                    {rangePrice && rangePrice.price_breakdown.length > 0 && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => setShowBreakdown(v => !v)}
+                          className="flex items-center gap-1 text-xs text-accent hover:underline"
+                        >
+                          {showBreakdown ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+                          {showBreakdown ? 'Hide' : 'Show'} price breakdown
+                        </button>
+                        {showBreakdown && (
+                          <div className="mt-1 max-h-40 overflow-y-auto rounded border bg-background p-2 space-y-1">
+                            {rangePrice.price_breakdown.map(day => (
+                              <div key={day.date} className="flex justify-between text-xs">
+                                <span className="text-muted-foreground">
+                                  {new Date(day.date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
+                                </span>
+                                <span className={day.is_custom ? 'text-blue-600 font-semibold' : ''}>
+                                  €{parseFloat(day.price as any).toFixed(2)}
+                                  {day.is_custom && ' ✎'}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </>
+                )}
               </div>
             )}
 
@@ -234,8 +345,8 @@ export function BookingDialog({ car, open, onOpenChange }: BookingDialogProps) {
 
             <div className="rounded-lg bg-muted p-4">
               <div className="flex justify-between items-center">
-                <span className="text-muted-foreground">Total</span>
-                <span className="text-xl font-bold text-accent">${totalPrice}</span>
+                <span className="text-muted-foreground">Total ({totalDays} day{totalDays !== 1 ? 's' : ''})</span>
+                <span className="text-xl font-bold text-accent">€{totalPrice.toFixed(2)}</span>
               </div>
             </div>
 
@@ -300,7 +411,7 @@ export function BookingDialog({ car, open, onOpenChange }: BookingDialogProps) {
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Total Price</span>
-                  <span className="font-bold text-accent">${totalPrice}</span>
+                  <span className="font-bold text-accent">€{totalPrice.toFixed(2)}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Status</span>
